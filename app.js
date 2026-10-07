@@ -33,6 +33,7 @@ function errMsg(e) {
   const m = (e && (e.message || e.error_description || e.error)) || '';
   if (/Failed to fetch|NetworkError|network/i.test(m)) return '인터넷 연결을 확인해 주세요.';
   if (/JWT|session|not authenticated/i.test(m)) return '로그인이 만료됐어요. 새로고침 후 다시 로그인해 주세요.';
+  if (/review_summary|review_by|review_at/i.test(m)) return '리뷰 요약 칸이 아직 없어요. 설치 안내서대로 review-update.sql을 Supabase에서 실행해 주세요.';
   if (/sale_price|sale_until|sale_note|paid_price|schema cache/i.test(m)) return '세일 칸이 아직 없어요. 설치 안내서대로 sale-update.sql을 Supabase에서 실행해 주세요.';
   if (/row-level security|permission/i.test(m)) return '저장 권한이 없어요. 설치 안내서의 SQL을 실행했는지 확인해 주세요.';
   return '저장하지 못했어요. ' + (m ? `(${m})` : '잠시 후 다시 시도해 주세요.');
@@ -97,7 +98,7 @@ function renderList() {
   if (S.f === 'must') arr = arr.filter(i => i.priority === '출산 전 필수' && !i.skip);
   else if (S.f === 'sale') arr = arr.filter(i => !i.skip && candsOf(i.id).some(saleOn));
   else if (S.f !== 'all') arr = arr.filter(i => stateOf(i) === S.f);
-  if (q) arr = arr.filter(i => [i.name, i.category, i.note, ...candsOf(i.id).flatMap(c => [c.product, c.brand])].some(x => x && String(x).toLowerCase().includes(q)));
+  if (q) arr = arr.filter(i => [i.name, i.category, i.note, ...candsOf(i.id).flatMap(c => [c.product, c.brand, c.review_summary])].some(x => x && String(x).toLowerCase().includes(q)));
   if (!arr.length) { L.innerHTML = '<div class="empty">조건에 맞는 품목이 없어요.</div>'; return; }
   const groups = cats.map(c => [c, arr.filter(i => i.category === c).sort((a, b) => (a.sort_order ?? 1e9) - (b.sort_order ?? 1e9) || ts(a) - ts(b))]).filter(g => g[1].length);
   L.innerHTML = groups.map(([c, its]) => {
@@ -140,6 +141,64 @@ function saleLine(c) {
   if (saleEnded(c)) return `<div class="sale-line ended">세일 끝남 (${md(c.sale_until)}, ${money(c.sale_price)})</div>`;
   return '';
 }
+/* ---------- 리뷰 요약 ---------- */
+function reviewPrompt(c) {
+  const it = S.items.get(c.item_id);
+  const name = [c.brand, c.product].filter(Boolean).join(' ');
+  return `${name}${it ? ` (${it.name})` : ''} 제품에 대해 웹에서 최신 정보를 찾아 한국어로 짧게 정리해줘. 미국에서 첫 아기용으로 살지 고민 중이야.
+
+1. 한 줄 평
+2. 장점 3~5개
+3. 단점 3~5개
+4. 실사용자 리뷰에서 자주 나오는 칭찬과 불만 (Reddit, Amazon, Babylist 등)
+5. 미국 CPSC 리콜이나 안전 이슈 여부 (없으면 '확인된 리콜 없음'과 확인한 날짜)
+6. 비슷한 가격대 대안 1~2개
+
+각 항목은 짧은 글머리표로 쓰고, 맨 끝에 참고한 출처 링크를 붙여줘. 확실하지 않은 건 확실하지 않다고 써줘.`;
+}
+const claudeUrl = c => 'https://claude.ai/new?q=' + encodeURIComponent(reviewPrompt(c));
+const gUrl = q => 'https://www.google.com/search?q=' + encodeURIComponent(q);
+const nameQ = c => [c.brand, c.product].filter(Boolean).join(' ');
+function linkify(t) {
+  return esc(t)
+    .replace(/^#{1,6}\s*(.+)$/gm, '<b>$1</b>')
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, t2, u) => `${t2} ${u}`)
+    .replace(/https?:\/\/[^\s<>"')\]]+/g, u => `<a href="${u}" target="_blank" rel="noopener">${u.length > 48 ? u.slice(0, 45) + '…' : u}</a>`); }
+function reviewHtml(c) {
+  const research = `<div class="research">
+    <a class="btn sm ai" href="${esc(claudeUrl(c))}" target="_blank" rel="noopener" data-copy="${c.id}">Claude에게 리뷰 요약 받기 ↗</a>
+    <span class="minor"><a href="${esc('https://www.reddit.com/search/?q=' + encodeURIComponent(nameQ(c) + ' review'))}" target="_blank" rel="noopener">Reddit</a> · <a href="${esc(gUrl(nameQ(c) + ' recall site:cpsc.gov'))}" target="_blank" rel="noopener">CPSC 리콜</a> · <a href="${esc(gUrl(nameQ(c) + ' review site:babylist.com'))}" target="_blank" rel="noopener">Babylist</a></span>
+  </div>`;
+  if (!c.review_summary) return `<div class="review empty-r">${research}<button class="linkbtn" data-a="review" data-id="${c.id}" style="padding-left:0">+ 받은 요약 붙여넣기</button></div>`;
+  const long = c.review_summary.length > 420 || c.review_summary.split('\n').length > 12;
+  const when = c.review_at ? new Date(c.review_at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' }) : '';
+  return `<div class="review"><div class="rhd"><span class="l">리뷰 요약</span><span class="b">${[c.review_by, when].filter(Boolean).map(esc).join(' · ')}</span></div>
+    <div class="rtext ${long ? 'clip' : ''}" id="rv-${c.id}">${linkify(c.review_summary)}</div>
+    <div class="ract">${long ? `<button class="linkbtn" data-a="more" data-id="${c.id}" style="padding-left:0">더 보기</button>` : ''}<button class="linkbtn" data-a="review" data-id="${c.id}">요약 수정</button></div>
+    ${research}</div>`;
+}
+function openReview(id) {
+  const c = S.cands.get(id); if (!c) return; E = { kind: 'review', id };
+  openSheet(`<div class="ovhead"><button class="back" data-a="cancel">취소</button><h2>리뷰 요약 · ${esc(c.product)}</h2><button class="btn" id="r-save" data-a="savereview">저장</button></div>
+  <div class="note-box">Claude가 정리해준 내용을 전부 복사해서 아래에 붙여넣으세요. 저장하면 두 분 화면에 함께 보여요.</div>
+  <div class="f"><label for="r-text">리뷰 요약</label><textarea id="r-text" class="in" style="min-height:45vh" placeholder="여기에 붙여넣기">${esc(c.review_summary || '')}</textarea></div>
+  <div class="err" id="e-err"></div>
+  <div class="actions"><a class="btn ghost" href="${esc(claudeUrl(c))}" target="_blank" rel="noopener" data-copy="${c.id}">Claude 다시 열기 ↗</a>${c.review_summary ? '<button class="btn danger" data-a="delreview">요약 지우기</button>' : ''}</div>`);
+}
+async function saveReview(clear) {
+  const text = clear ? '' : $('#r-text').value.trim();
+  const btn = $('#r-save'); btn.disabled = true;
+  try {
+    const r = await run(sb.from('candidates').update({ review_summary: text, review_by: text ? nameOf(S.user) : '', review_at: text ? new Date().toISOString() : null }).eq('id', E.id).select().single());
+    S.cands.set(r.id, r); closeSheet(); render(); toast(clear ? '요약을 지웠어요' : '요약을 저장했어요');
+  } catch (e) { btn.disabled = false; $('#e-err').textContent = errMsg(e); }
+}
+async function copyPrompt(id) {
+  const c = S.cands.get(id); if (!c) return;
+  try { await navigator.clipboard.writeText(reviewPrompt(c)); toast('질문을 복사했어요. Claude에 질문이 안 보이면 붙여넣기 하세요'); } catch (e) {}
+}
+
 function candHtml(c) {
   const link = safeLink(c.link);
   return `<div class="cand ${c.bought ? 'got' : c.chosen ? 'pick' : ''}">
@@ -149,6 +208,7 @@ function candHtml(c) {
   ${(c.pros || c.cons) ? `<div class="pc">${c.pros ? `<div class="pro"><span class="l">장점</span>${esc(c.pros)}</div>` : ''}${c.cons ? `<div class="con"><span class="l">단점</span>${esc(c.cons)}</div>` : ''}</div>` : ''}
   ${c.note ? `<div class="b" style="white-space:pre-wrap">${esc(c.note)}</div>` : ''}
   ${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">제품 페이지 ↗</a>` : ''}
+  ${reviewHtml(c)}
   ${c.added_by ? `<div class="b">추가: ${esc(c.added_by)}</div>` : ''}
   <div class="acts">
     ${c.bought ? `<button class="btn sm ghost" data-a="unbuy" data-id="${c.id}">구매 취소</button>` : c.chosen ? `<button class="btn sm okb" data-a="buy" data-id="${c.id}">샀어요</button><button class="btn sm ghost" data-a="unchoose" data-id="${c.id}">결정 취소</button>` : `<button class="btn sm" data-a="choose" data-id="${c.id}">이걸로 결정</button>`}
@@ -260,6 +320,10 @@ const H = {
   buy: a => setPick(a.dataset.id, true, true),
   unbuy: a => setPick(a.dataset.id, true, false),
   cancel: () => closeSheet(),
+  review: a => openReview(a.dataset.id),
+  savereview: () => saveReview(false),
+  delreview: () => saveReview(true),
+  more: a => { const el = document.getElementById('rv-' + a.dataset.id); if (el) { el.classList.toggle('clip'); a.textContent = el.classList.contains('clip') ? '더 보기' : '접기'; } },
   clearsale: () => { $('#c-sale').value = ''; $('#c-until').value = ''; $('#c-salenote').value = ''; $('#c-salehint').textContent = ''; },
   seg: a => {
     const g = a.dataset.g, v = a.dataset.v;
@@ -268,6 +332,7 @@ const H = {
   },
   logout: async () => { await sb.auth.signOut(); location.reload(); },
 };
+document.addEventListener('click', ev => { const cp = ev.target.closest('a[data-copy]'); if (cp) copyPrompt(cp.dataset.copy); }, true);
 document.addEventListener('click', ev => { const a = ev.target.closest('[data-a]'); if (!a) return; const f = H[a.dataset.a]; if (f) { ev.preventDefault(); f(a, ev); } });
 $('#q').addEventListener('input', ev => { S.q = ev.target.value; render(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.user && !E) reload().catch(() => {}); });

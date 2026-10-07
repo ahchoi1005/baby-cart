@@ -37,6 +37,10 @@ alter table public.candidates add column if not exists sale_price numeric(10,2);
 alter table public.candidates add column if not exists sale_until date;
 alter table public.candidates add column if not exists sale_note text not null default '';
 alter table public.candidates add column if not exists paid_price numeric(10,2);
+-- 리뷰 요약 (review-update.sql 과 같은 내용)
+alter table public.candidates add column if not exists review_summary text not null default '';
+alter table public.candidates add column if not exists review_by text not null default '';
+alter table public.candidates add column if not exists review_at timestamptz;
 create index if not exists candidates_item_id_idx on public.candidates (item_id);
 
 -- 수정 시각 자동 기록

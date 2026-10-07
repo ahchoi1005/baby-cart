@@ -125,6 +125,18 @@ textarea.in{min-height:72px;resize:vertical}
 .sale-line.ended{background:var(--soft);color:var(--muted);font-weight:500}
 .salebox{border:1px dashed var(--line);border-radius:12px;padding:12px;margin-bottom:14px}
 .save{font-weight:600;color:var(--ok)}
+.review{background:var(--soft);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.review.empty-r{background:transparent;border:1px dashed var(--line)}
+.review .rhd{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.review .l{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--accent)}
+.rtext{font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+.rtext.clip{max-height:11.5em;overflow:hidden;-webkit-mask-image:linear-gradient(#000 70%,transparent);mask-image:linear-gradient(#000 70%,transparent)}
+.ract{display:flex;gap:4px;flex-wrap:wrap}
+.research{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.btn.ai{background:var(--ink);color:var(--bg);text-decoration:none}
+.minor{font-size:12px;color:var(--muted)}
+.minor a{color:var(--muted)}
+a.btn{display:inline-flex;align-items:center;text-decoration:none}
 .login{max-width:360px;margin:16vh auto 0;display:flex;flex-direction:column;gap:10px}
 .login h1{font-size:36px}
 .help{font-size:13px;color:var(--muted)}
@@ -160,8 +172,8 @@ textarea.in{min-height:72px;resize:vertical}
 <section id="sheet" class="ov" hidden></section>
 <div id="toast" class="toast" hidden></div>
 
-<script src="config.js?v=20261007b"></script>
+<script src="config.js?v=20261007c"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="app.js?v=20261007b"></script>
+<script src="app.js?v=20261007c"></script>
 </body>
 </html>
