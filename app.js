@@ -14,6 +14,15 @@ let sb = null, E = null, chan = null;
 /* ---------- helpers ---------- */
 const money = n => n == null || n === '' || isNaN(n) ? '' : '$' + Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
 const ts = x => x.created_at ? Date.parse(x.created_at) : 0;
+const today = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const num = v => v == null || v === '' || isNaN(v) ? null : Number(v);
+const md = d => d ? String(d).slice(5).replace('-', '/').replace(/^0/, '').replace('/0', '/') : '';
+// 세일: 세일가가 있고, 끝나는 날이 없거나 아직 안 지났으면 세일 중
+const saleOn = c => num(c.sale_price) != null && (!c.sale_until || c.sale_until >= today()) && (num(c.price) == null || num(c.sale_price) < num(c.price));
+const saleEnded = c => num(c.sale_price) != null && c.sale_until && c.sale_until < today();
+const nowPrice = c => saleOn(c) ? num(c.sale_price) : num(c.price);
+const costOf = c => c.bought ? (num(c.paid_price) ?? nowPrice(c)) : nowPrice(c);
+const offPct = (was, now) => was && now != null && now < was ? Math.round((1 - now / was) * 100) : 0;
 const candsOf = id => [...S.cands.values()].filter(c => c.item_id === id).sort((a, b) => ts(a) - ts(b));
 function stateOf(it) { if (it.skip) return 'skip'; const cs = candsOf(it.id); if (cs.some(c => c.bought)) return 'done'; if (cs.some(c => c.chosen)) return 'dec'; return 'todo'; }
 const pickOf = it => { const cs = candsOf(it.id); return cs.find(c => c.bought) || cs.find(c => c.chosen) || null; };
@@ -24,6 +33,7 @@ function errMsg(e) {
   const m = (e && (e.message || e.error_description || e.error)) || '';
   if (/Failed to fetch|NetworkError|network/i.test(m)) return '인터넷 연결을 확인해 주세요.';
   if (/JWT|session|not authenticated/i.test(m)) return '로그인이 만료됐어요. 새로고침 후 다시 로그인해 주세요.';
+  if (/sale_price|sale_until|sale_note|paid_price|schema cache/i.test(m)) return '세일 칸이 아직 없어요. 설치 안내서대로 sale-update.sql을 Supabase에서 실행해 주세요.';
   if (/row-level security|permission/i.test(m)) return '저장 권한이 없어요. 설치 안내서의 SQL을 실행했는지 확인해 주세요.';
   return '저장하지 못했어요. ' + (m ? `(${m})` : '잠시 후 다시 시도해 주세요.');
 }
@@ -60,12 +70,14 @@ function renderSum() {
   const items = [...S.items.values()].filter(i => !i.skip);
   const must = items.filter(i => i.priority === '출산 전 필수');
   const mustDone = must.filter(i => stateOf(i) !== 'todo').length;
-  let spent = 0, plan = 0;
-  items.forEach(i => { const p = pickOf(i); if (!p || p.price == null) return; const v = Number(p.price) || 0; if (p.bought) spent += v; else plan += v; });
+  let spent = 0, plan = 0, saved = 0;
+  items.forEach(i => { const p = pickOf(i); if (!p) return; const v = costOf(p); if (v == null) return; if (p.bought) spent += v; else plan += v; const was = num(p.price); if (was != null && v < was) saved += was - v; });
+  const onSale = items.filter(i => candsOf(i.id).some(saleOn)).length;
   const pct = must.length ? Math.round(mustDone / must.length * 100) : 0;
   $('#sum').innerHTML = `<div class="k d"><div class="lab">예정일 1월 1일까지</div><div class="v">${dd > 0 ? 'D-' + dd : dd === 0 ? 'D-day' : 'D+' + (-dd)}</div></div>
   <div class="k"><div class="lab">필수 품목 결정</div><div class="v">${mustDone}<small>/${must.length}</small></div><div class="meter"><i style="width:${pct}%"></i></div></div>
-  <div class="k"><div class="lab">결정·구매 합계</div><div class="v">${money(spent + plan) || '$0'}</div><div class="lab">구매완료 ${money(spent) || '$0'}</div></div>`;
+  <div class="k"><div class="lab">결정·구매 합계</div><div class="v">${money(spent + plan) || '$0'}</div><div class="lab">구매완료 ${money(spent) || '$0'}${saved ? ` · <b class="save">세일로 ${money(saved)} 절약</b>` : ''}</div></div>`;
+  $('#sum').dataset.sale = onSale;
 }
 function render() { renderList(); if (S.detail) renderDetail(); }
 function renderList() {
@@ -76,12 +88,14 @@ function renderList() {
   if (!all.length) { F.innerHTML = ''; L.innerHTML = `<div class="empty"><h2>아직 품목이 없어요</h2>유모차, 젖병처럼 사야 할 품목을 추가하고<br>품목마다 후보 제품을 모아 비교해 보세요.<div style="margin-top:16px"><button class="btn" data-a="additem">+ 첫 품목 추가</button></div></div>`; return; }
   const cnt = {}; all.forEach(i => cnt[i.category] = (cnt[i.category] || 0) + 1);
   const cats = [...CATS.filter(c => cnt[c]), ...Object.keys(cnt).filter(c => !CATS.includes(c))];
-  const FS = [['all', '전체'], ['must', '출산 전 필수'], ['todo', '아직 검토중'], ['dec', '결정만'], ['done', '구매완료']];
+  const nSale = all.filter(i => !i.skip && candsOf(i.id).some(saleOn)).length;
+  const FS = [['all', '전체'], ['must', '출산 전 필수'], ['todo', '아직 검토중'], ['dec', '결정만'], ['done', '구매완료'], ['sale', `세일 중${nSale ? ' ' + nSale : ''}`]];
   F.innerHTML = `<div class="chips"><button class="chip ${!S.cat ? 'on' : ''}" data-a="cat" data-v="">모든 카테고리</button>${cats.map(c => `<button class="chip ${S.cat === c ? 'on' : ''}" data-a="cat" data-v="${esc(c)}">${esc(c)}<span class="n">${cnt[c]}</span></button>`).join('')}</div>
   <div class="chips">${FS.map(([v, l]) => `<button class="chip ${S.f === v ? 'on' : ''}" data-a="f" data-v="${v}">${l}</button>`).join('')}</div>`;
   let arr = all; const q = S.q.trim().toLowerCase();
   if (S.cat) arr = arr.filter(i => i.category === S.cat);
   if (S.f === 'must') arr = arr.filter(i => i.priority === '출산 전 필수' && !i.skip);
+  else if (S.f === 'sale') arr = arr.filter(i => !i.skip && candsOf(i.id).some(saleOn));
   else if (S.f !== 'all') arr = arr.filter(i => stateOf(i) === S.f);
   if (q) arr = arr.filter(i => [i.name, i.category, i.note, ...candsOf(i.id).flatMap(c => [c.product, c.brand])].some(x => x && String(x).toLowerCase().includes(q)));
   if (!arr.length) { L.innerHTML = '<div class="empty">조건에 맞는 품목이 없어요.</div>'; return; }
@@ -92,9 +106,11 @@ function renderList() {
   }).join('');
 }
 function rowHtml(i) {
-  const st = stateOf(i), p = pickOf(i), n = candsOf(i.id).length;
+  const st = stateOf(i), p = pickOf(i), cs = candsOf(i.id), n = cs.length;
+  const sale = st !== 'skip' && !(p && p.bought) && cs.some(saleOn);
+  const cost = p ? costOf(p) : null;
   const sub = p ? `${esc(p.product)}${p.brand ? ' · ' + esc(p.brand) : ''}` : (n ? `후보 ${n}개 비교 중` : (i.note ? esc(i.note) : '후보 없음'));
-  return `<button class="row ${st === 'skip' ? 'skip' : ''}" data-a="item" data-id="${i.id}"><div class="main"><div class="t">${esc(i.name)}${i.priority === '출산 전 필수' && st !== 'skip' ? '<span class="must">필수</span>' : ''}</div><div class="s">${sub}</div></div>${p && p.price != null ? `<span class="p">${money(p.price)}</span>` : ''}${pill(st)}</button>`;
+  return `<button class="row ${st === 'skip' ? 'skip' : ''}" data-a="item" data-id="${i.id}"><div class="main"><div class="t">${esc(i.name)}${i.priority === '출산 전 필수' && st !== 'skip' ? '<span class="must">필수</span>' : ''}${sale ? '<span class="salechip">세일</span>' : ''}</div><div class="s">${sub}</div></div>${cost != null ? `<span class="p">${money(cost)}</span>` : ''}${pill(st)}</button>`;
 }
 function renderDetail() {
   const el = $('#detail'), it = S.items.get(S.detail);
@@ -110,10 +126,25 @@ function renderDetail() {
   el.hidden = false;
 }
 function safeLink(u) { u = String(u || '').trim(); if (!u) return ''; if (!/^https?:\/\//i.test(u)) u = 'https://' + u; return /^https?:\/\/[^\s"'<>]+$/i.test(u) ? u : ''; }
+function priceHtml(c) {
+  const was = num(c.price);
+  if (c.bought && num(c.paid_price) != null && was != null && num(c.paid_price) < was) return `<div class="price"><s class="was">${money(was)}</s>${money(c.paid_price)}</div>`;
+  if (saleOn(c) && was != null) return `<div class="price"><s class="was">${money(was)}</s>${money(c.sale_price)}<span class="off">-${offPct(was, num(c.sale_price))}%</span></div>`;
+  if (saleOn(c)) return `<div class="price">${money(c.sale_price)}<span class="off">세일</span></div>`;
+  return `<div class="price">${money(was)}</div>`;
+}
+function saleLine(c) {
+  if (c.bought) return num(c.paid_price) != null && num(c.price) != null && num(c.paid_price) < num(c.price) ? `<div class="sale-line">${money(num(c.price) - num(c.paid_price))} 아껴서 샀어요</div>` : '';
+  const bits = [c.sale_note, c.sale_until ? md(c.sale_until) + '까지' : ''].filter(Boolean).map(esc).join(' · ');
+  if (saleOn(c)) { const was = num(c.price); return `<div class="sale-line">세일 중${was != null ? ` · ${money(was - num(c.sale_price))} 절약` : ''}${bits ? ' · ' + bits : ''}</div>`; }
+  if (saleEnded(c)) return `<div class="sale-line ended">세일 끝남 (${md(c.sale_until)}, ${money(c.sale_price)})</div>`;
+  return '';
+}
 function candHtml(c) {
   const link = safeLink(c.link);
   return `<div class="cand ${c.bought ? 'got' : c.chosen ? 'pick' : ''}">
-  <div class="hd"><div style="min-width:0"><div class="t">${esc(c.product)}</div><div class="b">${esc(c.brand || '')}</div></div><div class="price">${money(c.price)}</div></div>
+  <div class="hd"><div style="min-width:0"><div class="t">${esc(c.product)}</div><div class="b">${esc(c.brand || '')}</div></div>${priceHtml(c)}</div>
+  ${saleLine(c)}
   ${c.bought ? pill('done') : c.chosen ? pill('dec') : ''}
   ${(c.pros || c.cons) ? `<div class="pc">${c.pros ? `<div class="pro"><span class="l">장점</span>${esc(c.pros)}</div>` : ''}${c.cons ? `<div class="con"><span class="l">단점</span>${esc(c.cons)}</div>` : ''}</div>` : ''}
   ${c.note ? `<div class="b" style="white-space:pre-wrap">${esc(c.note)}</div>` : ''}
@@ -166,17 +197,27 @@ function openCand({ itemId, id }) {
   <div class="f"><label for="c-product">제품명</label><input id="c-product" class="in" value="${esc(c ? c.product : '')}" placeholder="예: Vista V3"></div>
   <div class="two"><div class="f"><label for="c-brand">브랜드</label><input id="c-brand" class="in" value="${esc(c && c.brand || '')}" placeholder="예: UPPAbaby"></div>
   <div class="f"><label for="c-price">가격 ($)</label><input id="c-price" class="in" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(c && c.price != null ? c.price : '')}" placeholder="0"></div></div>
+  <div class="salebox"><div class="sec" style="margin-top:0"><span>세일 (있을 때만)</span></div>
+  <div class="two"><div class="f"><label for="c-sale">세일 가격 ($)</label><input id="c-sale" class="in" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(c && c.sale_price != null ? c.sale_price : '')}" placeholder="예: 879"></div>
+  <div class="f"><label for="c-until">세일 끝나는 날</label><input id="c-until" class="in" type="date" value="${esc(c && c.sale_until || '')}"></div></div>
+  <div class="f" style="margin-bottom:4px"><label for="c-salenote">세일 메모</label><input id="c-salenote" class="in" value="${esc(c && c.sale_note || '')}" placeholder="예: Target 블랙프라이데이, 쿠폰 코드"></div>
+  <div class="help" id="c-salehint"></div>
+  ${c && num(c.sale_price) != null ? '<button type="button" class="linkbtn" data-a="clearsale" style="padding-left:0">세일 정보 지우기</button>' : ''}</div>
   <div class="f"><label for="c-pros">장점</label><textarea id="c-pros" class="in" placeholder="한 줄에 하나씩">${esc(c && c.pros || '')}</textarea></div>
   <div class="f"><label for="c-cons">단점</label><textarea id="c-cons" class="in" placeholder="한 줄에 하나씩">${esc(c && c.cons || '')}</textarea></div>
   <div class="f"><label for="c-link">링크</label><input id="c-link" class="in" type="url" value="${esc(c && c.link || '')}" placeholder="https://"></div>
   <div class="f"><label for="c-note">메모</label><textarea id="c-note" class="in" placeholder="매장에서 본 느낌, 할인 정보 등">${esc(c && c.note || '')}</textarea></div>
   <div class="err" id="e-err"></div>
   ${c ? '<div class="actions"><button class="btn danger" id="c-del" data-a="delcand">이 후보 삭제</button></div>' : ''}`);
+  const hint = () => { const was = num($('#c-price').value), now = num($('#c-sale').value); const h = $('#c-salehint'); if (!h) return;
+    h.textContent = was != null && now != null ? (now < was ? `정가보다 ${money(was - now)} 싸요 (${offPct(was, now)}% 할인)` : '세일 가격이 정가보다 비싸거나 같아요.') : ''; };
+  $('#c-price').addEventListener('input', hint); $('#c-sale').addEventListener('input', hint); hint();
 }
 async function saveCand() {
   const product = $('#c-product').value.trim(); if (!product) { $('#e-err').textContent = '제품명을 입력해 주세요.'; return; }
-  const pv = $('#c-price').value.trim();
-  const body = { item_id: E.itemId, product, brand: $('#c-brand').value.trim(), price: pv === '' ? null : Number(pv), pros: $('#c-pros').value.trim(), cons: $('#c-cons').value.trim(), link: $('#c-link').value.trim(), note: $('#c-note').value.trim() };
+  const pv = $('#c-price').value.trim(), sv = $('#c-sale').value.trim();
+  const body = { item_id: E.itemId, product, brand: $('#c-brand').value.trim(), price: pv === '' ? null : Number(pv), pros: $('#c-pros').value.trim(), cons: $('#c-cons').value.trim(), link: $('#c-link').value.trim(), note: $('#c-note').value.trim(),
+    sale_price: sv === '' ? null : Number(sv), sale_until: $('#c-until').value || null, sale_note: $('#c-salenote').value.trim() };
   const btn = $('#c-save'); btn.disabled = true;
   try {
     const r = E.id ? await run(sb.from('candidates').update(body).eq('id', E.id).select().single())
@@ -196,7 +237,7 @@ async function setPick(id, chosen, bought) {
       const others = candsOf(c.item_id).filter(o => o.id !== id && (o.chosen || o.bought)).map(o => o.id);
       if (others.length) { await run(sb.from('candidates').update({ chosen: false, bought: false }).in('id', others)); others.forEach(o => S.cands.set(o, { ...S.cands.get(o), chosen: false, bought: false })); }
     }
-    const r = await run(sb.from('candidates').update({ chosen, bought }).eq('id', id).select().single());
+    const r = await run(sb.from('candidates').update({ chosen, bought, paid_price: bought ? nowPrice(c) : null }).eq('id', id).select().single());
     S.cands.set(r.id, r); render();
     toast(bought ? '구매완료로 표시했어요' : chosen ? '결정했어요' : '결정을 취소했어요');
   } catch (e) { toast(errMsg(e)); }
@@ -219,6 +260,7 @@ const H = {
   buy: a => setPick(a.dataset.id, true, true),
   unbuy: a => setPick(a.dataset.id, true, false),
   cancel: () => closeSheet(),
+  clearsale: () => { $('#c-sale').value = ''; $('#c-until').value = ''; $('#c-salenote').value = ''; $('#c-salehint').textContent = ''; },
   seg: a => {
     const g = a.dataset.g, v = a.dataset.v;
     if (g === 'cat') E.cat = v; if (g === 'pri') E.pri = v; if (g === 'skip') E.skip = v === '안 사기';

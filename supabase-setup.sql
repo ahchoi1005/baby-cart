@@ -32,6 +32,11 @@ create table if not exists public.candidates (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- 세일 가격 (sale-update.sql 과 같은 내용)
+alter table public.candidates add column if not exists sale_price numeric(10,2);
+alter table public.candidates add column if not exists sale_until date;
+alter table public.candidates add column if not exists sale_note text not null default '';
+alter table public.candidates add column if not exists paid_price numeric(10,2);
 create index if not exists candidates_item_id_idx on public.candidates (item_id);
 
 -- 수정 시각 자동 기록
