@@ -154,13 +154,28 @@ a.btn{display:inline-flex;align-items:center;text-decoration:none}
     <input id="lg-pw" class="in" type="password" autocomplete="current-password" placeholder="비밀번호" required>
     <button class="btn" id="lg-btn" type="submit">로그인</button>
     <div class="err" id="lg-err"></div>
+    <button class="linkbtn" type="button" id="lg-forgot" style="align-self:flex-start;padding-left:0">비밀번호를 잊었어요</button>
+  </form>
+</div>
+
+<div id="setpw" class="wrap" hidden>
+  <form class="login" id="setpwform">
+    <h1>비밀번호 정하기</h1>
+    <p class="help" style="margin:0" id="sp-help">앞으로 이 사이트에 로그인할 때 쓸 비밀번호를 정해 주세요.</p>
+    <input id="sp-email" class="in" type="email" autocomplete="username" readonly hidden>
+    <input id="sp-name" class="in" autocomplete="nickname" placeholder="화면에 보일 이름 (예: 수진)">
+    <input id="sp-pw" class="in" type="password" autocomplete="new-password" placeholder="새 비밀번호 (8자 이상)" required minlength="8">
+    <input id="sp-pw2" class="in" type="password" autocomplete="new-password" placeholder="새 비밀번호 한 번 더" required minlength="8">
+    <button class="btn" id="sp-btn" type="submit">저장하고 시작하기</button>
+    <button class="linkbtn" type="button" id="sp-cancel" hidden>취소</button>
+    <div class="err" id="sp-err"></div>
   </form>
 </div>
 
 <div id="app" class="wrap" hidden>
   <header class="top">
     <h1>아기맞이 장바구니<small>품목마다 후보를 모아 비교하고 같이 고르는 출산 준비 목록</small></h1>
-    <div class="who"><span id="me"></span><br><button class="linkbtn" data-a="logout">로그아웃</button></div>
+    <div class="who"><span id="me"></span><br><button class="linkbtn" data-a="changepw">비밀번호 바꾸기</button> <button class="linkbtn" data-a="logout">로그아웃</button></div>
   </header>
   <div class="sum" id="sum"></div>
   <input id="q" class="search" type="search" placeholder="품목, 제품, 브랜드 검색" autocomplete="off">
@@ -172,8 +187,8 @@ a.btn{display:inline-flex;align-items:center;text-decoration:none}
 <section id="sheet" class="ov" hidden></section>
 <div id="toast" class="toast" hidden></div>
 
-<script src="config.js?v=20261007c"></script>
+<script src="config.js?v=20261007d"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="app.js?v=20261007c"></script>
+<script src="app.js?v=20261007d"></script>
 </body>
 </html>

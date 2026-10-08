@@ -3,6 +3,8 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CFG = window.BABYCART_CONFIG || {};
+// 초대·비밀번호 재설정 메일 링크로 들어온 경우 (Supabase가 읽기 전에 미리 확인)
+const AUTH_LINK = (() => { try { const p = new URLSearchParams(location.hash.slice(1) || location.search.slice(1)); return { type: p.get('type') || '', error: p.get('error_code') || p.get('error') || '', desc: p.get('error_description') || '' }; } catch (e) { return {}; } })();
 const CATS = ['이동', '수유', '위생·목욕', '수면', '놀이·생활', '의류'];
 const PRI = ['출산 전 필수', '출산 후 구매', '선택'];
 const DUE = new Date(2027, 0, 1);
@@ -331,6 +333,7 @@ const H = {
     document.querySelectorAll(`#${g} .chip`).forEach(b => b.classList.toggle('on', b.dataset.v === v));
   },
   logout: async () => { await sb.auth.signOut(); location.reload(); },
+  changepw: () => showSetPw(true),
 };
 document.addEventListener('click', ev => { const cp = ev.target.closest('a[data-copy]'); if (cp) copyPrompt(cp.dataset.copy); }, true);
 document.addEventListener('click', ev => { const a = ev.target.closest('[data-a]'); if (!a) return; const f = H[a.dataset.a]; if (f) { ev.preventDefault(); f(a, ev); } });
@@ -339,13 +342,25 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 /* ---------- boot ---------- */
 async function showApp() {
-  $('#boot').hidden = true; $('#login').hidden = true; $('#app').hidden = false; $('#fab').hidden = false;
+  $('#boot').hidden = true; $('#login').hidden = true; $('#setpw').hidden = true; $('#app').hidden = false; $('#fab').hidden = false;
   $('#me').textContent = nameOf(S.user);
   render();
   try { await reload(); subscribe(); }
   catch (e) { $('#list').innerHTML = `<div class="empty"><h2>목록을 불러오지 못했어요</h2>${esc(errMsg(e))}<br><span class="help">설치 안내서의 Supabase 설정(SQL 실행)을 마쳤는지 확인해 주세요.</span></div>`; }
 }
-function showLogin() { $('#boot').hidden = true; $('#app').hidden = true; $('#fab').hidden = true; $('#login').hidden = false; }
+function showLogin() { $('#boot').hidden = true; $('#app').hidden = true; $('#fab').hidden = true; $('#setpw').hidden = true; $('#login').hidden = false; }
+function showSetPw(fromApp) {
+  $('#boot').hidden = true; $('#app').hidden = true; $('#fab').hidden = true; $('#login').hidden = true; $('#setpw').hidden = false;
+  $('#sp-name').value = (S.user && (S.user.user_metadata || {}).name) || '';
+  $('#sp-email').value = (S.user && S.user.email) || '';
+  $('#sp-help').textContent = fromApp ? '새 비밀번호를 정해 주세요.' : `${(S.user && S.user.email) || ''} 계정으로 로그인할 때 쓸 비밀번호를 정해 주세요.`;
+  $('#sp-cancel').hidden = !fromApp; $('#sp-err').textContent = '';
+}
+function linkError() {
+  const d = (AUTH_LINK.error + ' ' + AUTH_LINK.desc).toLowerCase();
+  if (/expired|invalid|otp/.test(d)) return '메일 링크가 만료됐거나 이미 사용됐어요. 초대(또는 비밀번호 재설정) 메일을 다시 받아서 가장 최근 메일의 링크를 눌러 주세요.';
+  return '메일 링크로 로그인하지 못했어요. 메일을 다시 받아 주세요.' + (AUTH_LINK.desc ? ` (${AUTH_LINK.desc})` : '');
+}
 (async () => {
   if (!CFG.SUPABASE_URL || !CFG.SUPABASE_ANON_KEY) {
     $('#boot').innerHTML = '<div class="empty" style="margin-top:15vh"><h2>설정이 필요해요</h2>config.js 파일에 Supabase 주소와 키를 넣어 주세요.<br>설치 안내서 3단계를 보세요.</div>'; return;
@@ -354,10 +369,38 @@ function showLogin() { $('#boot').hidden = true; $('#app').hidden = true; $('#fa
   const m = String(CFG.SUPABASE_URL).trim().match(/https?:\/\/[^/\s]+/);
   const baseUrl = m ? m[0] : String(CFG.SUPABASE_URL).trim();
   sb = window.supabase.createClient(baseUrl, String(CFG.SUPABASE_ANON_KEY).trim(), { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'babycart-auth' } });
+  let recovering = false;
+  sb.auth.onAuthStateChange((ev, session) => {
+    if (ev === 'SIGNED_OUT') { S.user = null; showLogin(); }
+    else if (ev === 'PASSWORD_RECOVERY') { recovering = true; if (session) S.user = session.user; showSetPw(false); }
+    else if (session) S.user = session.user;
+  });
   const { data } = await sb.auth.getSession();
-  if (data.session) { S.user = data.session.user; showApp(); } else showLogin();
-  sb.auth.onAuthStateChange((ev, session) => { if (ev === 'SIGNED_OUT') { S.user = null; showLogin(); } else if (session) S.user = session.user; });
+  const fromMail = ['invite', 'recovery', 'signup', 'magiclink'].includes(AUTH_LINK.type);
+  if (location.hash && /access_token|error|type=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search);
+  if (AUTH_LINK.error) { showLogin(); $('#lg-err').textContent = linkError(); return; }
+  if (data.session) { S.user = data.session.user; if (fromMail && ['invite', 'recovery'].includes(AUTH_LINK.type) || recovering) showSetPw(false); else showApp(); }
+  else showLogin();
 })();
+$('#setpwform').addEventListener('submit', async ev => {
+  ev.preventDefault(); const er = $('#sp-err'), btn = $('#sp-btn'); er.textContent = '';
+  const pw = $('#sp-pw').value, pw2 = $('#sp-pw2').value;
+  if (pw.length < 8) { er.textContent = '비밀번호는 8자 이상으로 정해 주세요.'; return; }
+  if (pw !== pw2) { er.textContent = '두 비밀번호가 달라요.'; return; }
+  btn.disabled = true;
+  const name = $('#sp-name').value.trim();
+  const { data, error } = await sb.auth.updateUser({ password: pw, data: name ? { name } : {} });
+  btn.disabled = false;
+  if (error) { er.textContent = /same|different from the old/i.test(error.message) ? '이전과 다른 비밀번호를 써 주세요.' : /weak|short|characters/i.test(error.message) ? '비밀번호가 너무 쉬워요. 더 길거나 복잡하게 정해 주세요.' : errMsg(error); return; }
+  S.user = data.user; $('#sp-pw').value = ''; $('#sp-pw2').value = ''; toast('비밀번호를 저장했어요'); showApp();
+});
+$('#sp-cancel').addEventListener('click', () => showApp());
+$('#lg-forgot').addEventListener('click', async () => {
+  const er = $('#lg-err'), email = $('#lg-email').value.trim();
+  if (!email) { er.textContent = '이메일을 먼저 입력하고 다시 눌러 주세요.'; return; }
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  er.textContent = error ? errMsg(error) : '비밀번호 재설정 메일을 보냈어요. 메일의 링크를 누르면 새 비밀번호를 정할 수 있어요.';
+});
 $('#loginform').addEventListener('submit', async ev => {
   ev.preventDefault(); const btn = $('#lg-btn'), er = $('#lg-err'); er.textContent = ''; btn.disabled = true;
   const { data, error } = await sb.auth.signInWithPassword({ email: $('#lg-email').value.trim(), password: $('#lg-pw').value });
